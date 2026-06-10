@@ -42,14 +42,14 @@ def calculate_indicators(df):
     df['MACD'] = exp1 - exp2
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
     
-    # 3. ATR (for Stop Loss / Take Profit)
+    # 3. ATR
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift(1))
     low_close = np.abs(df['Low'] - df['Close'].shift(1))
     true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['ATR'] = true_range.ewm(alpha=1/14, adjust=False).mean()
     
-    # 4. ADX (Chop Filter) - FIXED VERSION
+    # 4. ADX - FIXED VERSION
     up_move = df['High'] - df['High'].shift(1)
     down_move = df['Low'].shift(1) - df['Low']
     
@@ -72,26 +72,50 @@ def calculate_indicators(df):
 def generate_signal(asset_info, df_1h, df_1d):
     latest = df_1h.iloc[-2]
     prev = df_1h.iloc[-3]
-    current_price = latest['Close']
-    atr = latest['ATR']
-    adx = latest['ADX']
-    volume_ratio = latest['Volume'] / latest['Vol_SMA'] if latest['Vol_SMA'] > 0 else 0
+    
+    # Extract scalar values properly
+    current_price = float(latest['Close'])
+    atr = float(latest['ATR'])
+    adx = float(latest['ADX'])
+    volume = float(latest['Volume'])
+    vol_sma = float(latest['Vol_SMA'])
+    
+    # Calculate volume ratio safely
+    volume_ratio = volume / vol_sma if vol_sma > 0 else 0
     
     if adx < ADX_THRESHOLD or volume_ratio < 0.8:
         return "HOLD", current_price, 0, 0, "Filtered"
 
+    # Daily trend
     df_1d['EMA_50_Daily'] = df_1d['Close'].ewm(span=50, adjust=False).mean()
     latest_1d = df_1d.iloc[-2]
-    daily_bullish = latest_1d['Close'] > latest_1d['EMA_50_Daily']
-    daily_bearish = latest_1d['Close'] < latest_1d['EMA_50_Daily']
+    daily_close = float(latest_1d['Close'])
+    daily_ema = float(latest_1d['EMA_50_Daily'])
+    
+    daily_bullish = daily_close > daily_ema
+    daily_bearish = daily_close < daily_ema
 
-    if prev['EMA_Fast'] <= prev['EMA_Slow'] and latest['EMA_Fast'] > latest['EMA_Slow']:
-        if latest['MACD'] > latest['Signal_Line'] and daily_bullish:
-            return "BUY / LONG 🟢", current_price, current_price - (atr * SL_MULTIPLIER), current_price + (atr * TP_MULTIPLIER), f"HTF Bullish + Vol {volume_ratio:.1f}x + ADX {adx:.1f}"
+    # Get previous values
+    prev_ema_fast = float(prev['EMA_Fast'])
+    prev_ema_slow = float(prev['EMA_Slow'])
+    latest_ema_fast = float(latest['EMA_Fast'])
+    latest_ema_slow = float(latest['EMA_Slow'])
+    latest_macd = float(latest['MACD'])
+    latest_signal = float(latest['Signal_Line'])
+
+    # BUY LOGIC
+    if prev_ema_fast <= prev_ema_slow and latest_ema_fast > latest_ema_slow:
+        if latest_macd > latest_signal and daily_bullish:
+            sl = current_price - (atr * SL_MULTIPLIER)
+            tp = current_price + (atr * TP_MULTIPLIER)
+            return "BUY / LONG 🟢", current_price, sl, tp, f"HTF Bullish + Vol {volume_ratio:.1f}x + ADX {adx:.1f}"
             
-    elif prev['EMA_Fast'] >= prev['EMA_Slow'] and latest['EMA_Fast'] < latest['EMA_Slow']:
-        if latest['MACD'] < latest['Signal_Line'] and daily_bearish:
-            return "SELL / SHORT 🔴", current_price, current_price + (atr * SL_MULTIPLIER), current_price - (atr * TP_MULTIPLIER), f"HTF Bearish + Vol {volume_ratio:.1f}x + ADX {adx:.1f}"
+    # SELL LOGIC
+    elif prev_ema_fast >= prev_ema_slow and latest_ema_fast < latest_ema_slow:
+        if latest_macd < latest_signal and daily_bearish:
+            sl = current_price + (atr * SL_MULTIPLIER)
+            tp = current_price - (atr * TP_MULTIPLIER)
+            return "SELL / SHORT 🔴", current_price, sl, tp, f"HTF Bearish + Vol {volume_ratio:.1f}x + ADX {adx:.1f}"
             
     return "HOLD", current_price, 0, 0, "No Setup"
 
